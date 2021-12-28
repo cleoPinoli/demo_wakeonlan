@@ -1,12 +1,15 @@
+import os
 import sys
 from wakeonlan import send_magic_packet
 import ipaddress
 import time
-
-import aespython.aes_cipher
 import demo
 from pythonping import ping
-import smbclient
+from smb.SMBConnection import SMBConnection
+import socket
+
+from smbprotocol import Dialects
+from smbprotocol.connection import Connection
 
 '''
 Simple and goofy Python script which exploits the Wake-On-LAN technology
@@ -30,16 +33,22 @@ if isinstance(sys.argv[1], str):
     print('Target_MAC found, equals: ' + target_mac)
     send_magic_packet(target_mac)
     print('Magic_pkt sent, enjoy the magic.')  # this worked fine on Dec 26th, 2021
-    time.sleep(30)  # waits for the target machine to boot
+    time.sleep(1)  # waits for the target machine to boot
     ack = ''
     while ack == '':
-        print('Sending ping request to ' + target_ip + '...')
-        ack = ping(target_ip, True)
+        print('Sending ping request to ' + sys.argv[1] + '...')
+        ack = ping(sys.argv[1], True)
         # time.sleep(5)   # let's not pressure him too much right
     print('Connection established, I think...')
     # Now we scan for any shared files or folders using smb
 
-    for e in smbclient.scandir(r'\\' + target_ip, "*"):
-        print('Found one in the wild...')
-        demo.main(r'-i .\test_input.txt -o .\test_enc.txt -p pippo')
-        print('Encrypted ' + e + '. Oopsie~~')
+    conn = SMBConnection('', '', 'Hostname', socket.getfqdn(sys.argv[1]), '', True,
+                         SMBConnection.SIGN_WHEN_SUPPORTED,
+                         True)
+    assert conn.connect(sys.argv[1], 445)
+    Response = conn.listPath(3, )  # obtain a list of shares
+    print('Shares on: ' + socket.getfqdn(sys.argv[1]))
+    for i in range(len(Response)):
+        print("    File[", i, "] =", Response[i])
+
+    print("moertacci de pippo!")

@@ -5,7 +5,6 @@
 import hashlib
 import logging
 import random
-import spnego
 
 from collections import (
     OrderedDict,
@@ -260,134 +259,7 @@ class Session(object):
         # SESSION_SETUP request and response for this session
         self.preauth_integrity_hash_value = []
 
-    def connect(self):
-        log.debug("Decoding SPNEGO token containing supported auth mechanisms")
-        try:
-            context = spnego.client(self.username, self.password, service='cifs', hostname=self.connection.server_name,
-                                    options=spnego.NegotiateOptions.session_key, protocol=self.auth_protocol)
-        except spnego.exceptions.SpnegoError as err:
-            raise SMBAuthenticationError("Failed to authenticate with server: %s" % str(err.message))
 
-        self.connection.preauth_session_table[self.session_id] = self
-        in_token = self.connection.gss_negotiate_token
-        if self.auth_protocol != 'negotiate':
-            in_token = None  # The GSS Negotiate Token can only be used for Negotiate auth.
-
-        while not context.complete or in_token:
-            try:
-                out_token = context.step(in_token)
-            except spnego.exceptions.SpnegoError as err:
-                raise SMBAuthenticationError("Failed to authenticate with server: %s" % str(err.message))
-
-            if not out_token:
-                break
-
-            session_setup = SMB2SessionSetupRequest()
-            session_setup['capabilities'] = Capabilities.SMB2_GLOBAL_CAP_DFS
-            session_setup['security_mode'] = self.connection.client_security_mode
-            session_setup['buffer'] = out_token
-
-            log.info("Sending SMB2_SESSION_SETUP request message")
-            request = self.connection.send(session_setup, sid=self.session_id, credit_request=64)
-
-            log.info("Receiving SMB2_SESSION_SETUP response message")
-            try:
-                response = self.connection.receive(request)
-            except MoreProcessingRequired as exc:
-                mid = request.message['message_id'].get_value()
-                response = exc.header
-
-            # If this is the first time we received the actual session_id, update the preauth table with the server
-            # assigned id.
-            session_id = response['session_id'].get_value()
-            if self.session_id < 0:
-                del self.connection.preauth_session_table[self.session_id]
-                self.connection.preauth_session_table[session_id] = self
-
-            self.session_id = session_id
-
-            setup_response = SMB2SessionSetupResponse()
-            setup_response.unpack(response['data'].get_value())
-
-            in_token = setup_response['buffer'].get_value()
-
-            status = response['status'].get_value()
-            if status == NtStatus.STATUS_MORE_PROCESSING_REQUIRED:
-                log.info("More processing is required for SMB2_SESSION_SETUP")
-                preauth_value = self.connection.preauth_session_table.pop(response['message_id'].get_value())
-                self.preauth_integrity_hash_value.append(preauth_value)
-
-        log.info("Setting session id to %s" % self.session_id)
-        self._connected = True
-
-        # Move the session from the preauth table to the actual session table.
-        self.connection.session_table[self.session_id] = self.connection.preauth_session_table.pop(self.session_id)
-
-        # session_key is the first 16 bytes, padded 0 if less than 16
-        self.full_session_key = context.session_key
-        self.session_key = self.full_session_key[:16].ljust(16, b"\x00")
-
-        if self.connection.dialect >= Dialects.SMB_3_1_1:
-            preauth_hash = b"\x00" * 64
-            for hash_list in [self.connection.preauth_integrity_hash_value, self.preauth_integrity_hash_value]:
-                for message in hash_list:
-                    # Technically the algo is based on preauth_integrity_hash_id but we only support the 1
-                    preauth_hash = hashlib.sha512(preauth_hash + message).digest()
-
-            self.signing_key = self._smb3kdf(self.session_key, b"SMBSigningKey\x00", preauth_hash)
-            self.application_key = self._smb3kdf(self.session_key, b"SMBAppKey\x00", preauth_hash)
-
-            if self.connection.cipher_id in [
-                Ciphers.AES_256_CCM,
-                Ciphers.AES_256_GCM,
-            ]:
-                key_length = 32
-                key = self.full_session_key
-            else:
-                key_length = 16
-                key = self.session_key
-
-            self.encryption_key = self._smb3kdf(key, b"SMBC2SCipherKey\x00", preauth_hash, length=key_length)
-            self.decryption_key = self._smb3kdf(key, b"SMBS2CCipherKey\x00", preauth_hash, length=key_length)
-
-        elif self.connection.dialect >= Dialects.SMB_3_0_0:
-            self.signing_key = self._smb3kdf(self.session_key, b"SMB2AESCMAC\x00", b"SmbSign\x00")
-            self.application_key = self._smb3kdf(self.session_key, b"SMB2APP\x00", b"SmbRpc\x00")
-            self.encryption_key = self._smb3kdf(self.session_key, b"SMB2AESCCM\x00", b"ServerIn \x00")
-            self.decryption_key = self._smb3kdf(self.session_key, b"SMB2AESCCM\x00", b"ServerOut\x00")
-
-        else:
-            self.signing_key = self.session_key
-            self.application_key = self.session_key
-
-        flags = setup_response['session_flags']
-        if flags.has_flag(SessionFlags.SMB2_SESSION_FLAG_ENCRYPT_DATA) or self.require_encryption:
-            # make sure the connection actually supports encryption
-            if not self.connection.supports_encryption:
-                raise SMBException("SMB encryption is required but the connection does not support it")
-
-            self.encrypt_data = True
-            self.signing_required = False  # encryption covers signing
-
-        else:
-            self.encrypt_data = False
-
-        if flags.has_flag(SessionFlags.SMB2_SESSION_FLAG_IS_GUEST) or \
-                flags.has_flag(SessionFlags.SMB2_SESSION_FLAG_IS_NULL):
-            self.session_key = None
-            self.signing_key = None
-            self.application_key = None
-            self.encryption_key = None
-            self.decryption_key = None
-
-            if self.signing_required or self.encrypt_data:
-                self.session_id = None
-                raise SMBException("SMB encryption or signing was required but session was authenticated as a guest "
-                                   "which does not support encryption or signing")
-
-        if self.signing_required:
-            log.info("Verifying the SMB Setup Session signature as auth is successful")
-            self.connection.verify_signature(response, self.session_id, force=True)
 
     def disconnect(self, close=True):
         """

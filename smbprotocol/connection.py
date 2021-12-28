@@ -82,10 +82,10 @@ from smbprotocol.transport import (
     Tcp,
 )
 
-try:
-    from queue import Queue, Empty
-except ImportError:  # pragma: no cover
-    from Queue import Queue, Empty
+# try:
+from queue import Queue, Empty
+# except ImportError:  # pragma: no cover
+# from Queue import Queue, Empty
 
 log = logging.getLogger(__name__)
 
