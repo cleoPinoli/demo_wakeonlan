@@ -18,7 +18,7 @@ Licensed under the MIT license http://www.opensource.org/licenses/mit-license.ph
 """
 __author__ = "Adam Newman"
 
-#Normally use relative import. In test mode use local import.
+# Normally use relative import. In test mode use local import.
 try:
     from . import aes_tables
 except ValueError:

